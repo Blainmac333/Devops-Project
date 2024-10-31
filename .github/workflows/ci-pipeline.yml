@@ -1,0 +1,40 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - feature/api-setup
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          cd api
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Tests
+        run: |
+          cd api
+          # Replace this with your testing command, e.g., `pytest`
+          pytest
+
+      - name: Build and Deploy
+        if: success()  # Only run this step if previous steps were successful
+        run: |
+          cd api
+          # Add build or deployment steps here if necessary

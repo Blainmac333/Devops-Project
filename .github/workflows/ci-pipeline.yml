@@ -6,6 +6,7 @@ on:
       - master
   push:
     branches:
+      - master
       - feature/api-setup
 
 jobs:
@@ -27,14 +28,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Commented out Run Tests step, as there are no tests currently
-      # - name: Run Tests
-      #   run: |
-      #     cd api
-      #     pytest
+      # Docker setup for building and pushing images
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-      - name: Build and Deploy
-        if: success()  # Only run this step if previous steps were successful
-        run: |
-          cd api
-          # Add build or deployment steps here if necessary
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Build and push API image
+      - name: Build and push API Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          push: true
+          tags: your-dockerhub-username/api:latest
+
+      # Build and push Frontend image
+      - name: Build and push Frontend Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: your-dockerhub-username/frontend:latest

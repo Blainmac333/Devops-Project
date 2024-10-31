@@ -46,7 +46,7 @@ jobs:
           context: ./api
           file: ./api/Dockerfile
           push: true
-          tags: your-dockerhub-username/qr-code-api:latest
+          tags: ${{ secrets.DOCKER_USERNAME }}/qr-code-api:latest
 
       # Build and push Frontend image
       - name: Build and push Frontend Docker image
@@ -55,4 +55,4 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
-          tags: your-dockerhub-username/qr-code-frontend:latest
+          tags: ${{ secrets.DOCKER_USERNAME }}/qr-code-frontend:latest

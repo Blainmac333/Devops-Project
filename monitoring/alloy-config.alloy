@@ -11,7 +11,7 @@ loki.source.journal "journal_logs" {
 }
 
 loki.process "journal_logs" {
-  # forward_to = [loki.write.grafana_cloud_loki.receiver]  # TODO: point at local Loki once it's set up
+  forward_to = []  // TODO: point at local Loki once it's set up
 
   stage.drop {
     older_than = "24h"
@@ -26,7 +26,7 @@ local.file_match "docker_logs" {
 }
 
 loki.process "docker_logs" {
-  # forward_to = [loki.write.grafana_cloud_loki.receiver]  # TODO: point at local Loki once it's set up
+  forward_to = []  // TODO: point at local Loki once it's set up
 
   stage.docker {}
 

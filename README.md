@@ -13,7 +13,7 @@ All services run under the **\*.blainweb.com** domain, routed through a **Cloudf
 |----------|--------------|--------|
 | **QR Code App** | Users submit URLs to generate QR codes stored in S3-compatible cloud storage. | Frontend: Next.js / Backend: FastAPI |
 | **CV / Portfolio Website** | Personal website showcasing projects and experience. | React / Static Hosting |
-| **Grafana Dashboards** | Cluster and workload observability with real-time metrics and alerting. Metrics forward to Grafana Cloud via remote_write; logs ship via Grafana Alloy → Loki. | Grafana + Prometheus + Grafana Cloud + Alloy |
+| **Grafana Dashboards** | Cluster and workload observability with real-time metrics, logs, and alerting — fully self-hosted. | Grafana + Prometheus + Loki + Alloy |
 | **Velero Backups** | Automated cluster backups and recovery validation. | Velero + Backblaze B2 |
 | **Argo CD** | GitOps-based continuous delivery that syncs GitHub changes to Kubernetes. | Argo CD + Helm |
 | **Cloudflare Tunnel** | Secure tunnel routing all subdomains to the Pi without exposing ports. | cloudflared |
@@ -64,8 +64,7 @@ All sensitive credentials are stored securely in **GitHub Actions Secrets**.
 | `CLOUDFLARE_ZONE_ID` | Cloudflare Zone ID for blainweb.com |
 | `GHCR_READ_TOKEN` | Read-only GHCR token used as the k3s image pull secret for private container images |
 | `GH_PAT` | GitHub Personal Access Token used by the GitOps commit-back step to push updated image tags to `master` |
-| `GRAFANA_CLOUD_REMOTE_WRITE_TOKEN` | Bearer token for Prometheus → Grafana Cloud remote_write (written to a gitignored `password_file` by CI) |
-| `GRAFANA_CLOUD_LOKI_TOKEN` | Bearer token for Grafana Alloy → Grafana Cloud Loki log shipping |
+| `GRAFANA_ADMIN_PASSWORD` | Admin password for the local Grafana instance |
 | `DISCORD_WEBHOOK_URL` | Discord webhook URL for Grafana alert notifications |
 | `PI_SSH_KEY` | Private SSH key for GitHub Actions → Raspberry Pi connections |
 | `PI_SSH_HOST` | Hostname/IP of the Raspberry Pi |
@@ -76,7 +75,6 @@ Secrets are injected during CI/CD to:
 - Deploy applications to the Pi's Kubernetes cluster.  
 - Manage DNS records via **Terraform + Cloudflare**.  
 - Pull private images from GHCR into k3s.  
-- Ship metrics and logs to **Grafana Cloud** without storing credentials in the repo (the `password_file` pattern writes tokens to a gitignored path at runtime).  
 - Configure runtime environment variables securely (never exposed in code).
 
 ---
@@ -172,15 +170,13 @@ Velero exposes metrics on port `8085`, scraped by Prometheus via NodePort `31085
 
 ## 📊 Monitoring & Observability
 
-> **In transition:** The monitoring stack is migrating from fully self-hosted to a hybrid model using **Grafana Cloud**. Local Prometheus and Grafana continue to run on the Pi; removal of the local Grafana instance is a planned backlog item. The sections below reflect the current live state.
-
 ### Metrics Pipeline
 
-**Prometheus** runs locally on the Pi and scrapes all cluster components via NodePort services and Docker targets. Metrics are **forwarded to Grafana Cloud** via `remote_write`, using a `password_file` secrets pattern — the token is written to a gitignored path by GitHub Actions at deploy time, keeping credentials out of the repository entirely.
+**Prometheus** runs locally on the Pi and scrapes all cluster components via NodePort services and Docker targets, storing metrics locally in its own TSDB.
 
 ### Log Pipeline
 
-**Grafana Alloy** runs on the Pi and ships container and system logs to **Grafana Cloud Loki**. This gives centralised log storage and querying without requiring a self-hosted Loki instance. Alloy authenticates using `GRAFANA_CLOUD_LOKI_TOKEN` injected via CI.
+**Grafana Alloy** runs on the Pi and ships logs to a local **Loki** instance — journal logs (via systemd-journald) and Docker container logs (tailed from /var/lib/docker/containers/*/*.log), both filtered with a 24h drop rule to avoid ingesting historical backlog. Alloy pushes to Loki via loki.write, targeting http://loki:3100 over the internal Docker network — no authentication required.
 
 ### Dashboards & Access
 
@@ -188,11 +184,11 @@ Velero exposes metrics on port `8085`, scraped by Prometheus via NodePort `31085
 - Pod health and container uptime  
 - Velero backup status and last successful timestamp  
 
-Access via: **[grafana.blainweb.com](https://grafana.blainweb.com)** *(secured access only)* — dashboards query Grafana Cloud as the data source.
+Access via: **[grafana.blainweb.com](https://grafana.blainweb.com)** *(secured access only)* — dashboards query local Prometheus and Loki as data sources.
 
 ### Prometheus Scrape Targets
 
-The following targets are scraped locally; all data is also forwarded to Grafana Cloud via `remote_write`.
+The following targets are scraped locally.
 
 | Job | Target | Description |
 |-----|--------|-------------|
@@ -240,16 +236,12 @@ Alerts are delivered via **Discord** webhook. The Velero alert targets only the 
 │
 ├── Docker
 │   ├── Caddy (reverse proxy)
-│   ├── Grafana + Prometheus (monitoring stack — local; Grafana removal pending)
-│   ├── Grafana Alloy (log collector → Grafana Cloud Loki)
+│   ├── Grafana + Prometheus + Loki (fully local monitoring stack)
+│   ├── Grafana Alloy (log collector → local Loki)
 │   ├── cAdvisor + Node Exporter (metrics collectors)
 │   └── GitHub Actions Runner (Self-Hosted ARM64, always-on)
 │
-├── Persistent Volumes → Backblaze B2 (via Velero)
-│
-└── Outbound telemetry → Grafana Cloud
-    ├── Prometheus remote_write → Grafana Cloud Metrics
-    └── Grafana Alloy → Grafana Cloud Loki (logs)
+└── Persistent Volumes → Backblaze B2 (via Velero)
 ```
 
 ---
@@ -275,6 +267,9 @@ Real operational issues encountered and resolved — included here because they 
 | **Prometheus cardinality overage** | High-cardinality labels (per-request label dimensions) caused metric series to spike, exceeding Grafana Cloud's free-tier limit. | Identified offending jobs via the Grafana Cloud usage dashboard, dropped high-cardinality labels using `metric_relabel_configs`, and added a `sample_limit` guard in the scrape config. |
 | **YAML duplicate-key crash loop** | A duplicate key in a Kubernetes manifest (`env:` block) was silently accepted by `kubectl apply` but caused the pod to enter a crash loop at runtime. | Traced via pod logs and `kubectl describe`; fixed the manifest and added YAML linting (`yamllint`) to the CI pipeline to catch this class of error before deployment. |
 | **GHCR token expiry / image pull failure** | The k3s image pull secret (`GHCR_READ_TOKEN`) expired, causing new pod deployments to fail with `ImagePullBackOff`. | Rotated the token in GitHub Secrets and re-ran the CI workflow to re-provision the k3s pull secret. Documented token rotation as a recurring maintenance task. |
+| **Alloy config parse failure (crash loop)** | A commented-out line intended to disconnect Alloy from a removed Grafana Cloud sink used `#`, which is invalid comment syntax in Alloy's config language (`//` is required). Alloy entered a continuous crash loop on startup. | Corrected the syntax and used an explicit `forward_to = []` to clearly mark the pipeline as intentionally disconnected pending local Loki setup. |
+| **Deploy pipeline silently not syncing a config file** | `monitoring/alloy-config.alloy` was placed on the Pi manually during initial setup and was never wired into the `deploy.yml` sync steps — commits to this file in the repo had no effect on the running Pi, unlike `prometheus.yml`, which was correctly deploy-managed. | Traced by comparing the live file on the Pi against the repo post-merge. Added an explicit sync step for `alloy-config.alloy` to `deploy.yml`, matching the existing pattern used for `prometheus.yml`. |
+| **Grafana admin lockout (recurring)** | The `GF_SECURITY_ADMIN_PASSWORD`/`GRAFANA_ADMIN_PASSWORD` environment variable is only applied by Grafana on first container initialization; once its internal database exists, later env var changes have no effect, causing drift between the stored secret and the actual running password. | Reset via `docker exec -it grafana grafana cli admin reset-admin-password <password>` (note: newer Grafana images use `grafana cli` as two words, not the older `grafana-cli` binary), then re-synced the GitHub secret to match. |
 
 ---
 
@@ -288,8 +283,8 @@ Real operational issues encountered and resolved — included here because they 
 | **Orchestration** | Kubernetes (k3s) |
 | **Continuous Delivery** | Argo CD (GitOps) |
 | **CI/CD** | GitHub Actions (Self-Hosted ARM64 Runner) |
-| **Monitoring** | Grafana, Prometheus, Grafana Cloud |
-| **Log Shipping** | Grafana Alloy → Grafana Cloud Loki |
+| **Monitoring** | Grafana, Prometheus, Loki (fully self-hosted) |
+| **Log Shipping** | Grafana Alloy → local Loki |
 | **Alerting** | Grafana Alerting → Discord |
 | **Backups** | Velero |
 | **Reverse Proxy** | Caddy → Traefik |
@@ -309,7 +304,7 @@ This project demonstrates:
 - 🧠 Self-hosted CI/CD, monitoring, and recovery on ARM hardware.  
 - 🔐 Secure secrets and image management with GitHub + GHCR.  
 - 💾 Real-world disaster recovery using Velero and Backblaze B2.  
-- 📈 Production-grade observability, alerting, and monitoring.  
+- 📈 Production-grade observability, alerting, and monitoring — fully self-hosted, no external dependency.  
 - 🌍 Infrastructure-as-Code DNS management via Terraform with full GitOps review flow.
 
 ---
@@ -320,7 +315,7 @@ This project demonstrates:
 - Argo CD auto-syncs all new deployments from `master`.  
 - Velero performs daily verified backups to Backblaze B2 with 7-day retention.  
 - Grafana dashboards actively monitor cluster health with Discord alerting for 9 alert conditions.  
-- Metrics forward to **Grafana Cloud** via Prometheus `remote_write`; logs ship via **Grafana Alloy → Loki** (Grafana Cloud). Local Grafana instance removal is in progress.  
+- Metrics and logs are fully self-hosted: Prometheus stores metrics locally, Loki (via Grafana Alloy) stores logs locally — no external cloud monitoring dependency.  
 - The GitHub Actions deploy pipeline runs entirely on the **self-hosted ARM64 Pi runner**.  
 - Terraform manages all DNS records for blainweb.com subdomains, with state stored in Backblaze B2.  
 - Trivy scans every image build for fixable CRITICAL CVEs — results visible in the GitHub Security tab.  

@@ -74,6 +74,16 @@ services:
       - /sys/fs/cgroup:/sys/fs/cgroup:ro
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
   alloy:
     image: grafana/alloy:latest
     container_name: alloy
@@ -96,3 +106,4 @@ volumes:
   prom-data:
   grafana-data:
   alloy-data:
+  loki-data:

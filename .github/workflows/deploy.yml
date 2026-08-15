@@ -279,22 +279,6 @@ jobs:
           EOF
           chmod 600 grafana.env
 
-      - name: Write Grafana Cloud credentials
-        run: |
-          set -e
-          cd ~/apps/devops-qr
-          mkdir -p monitoring/secrets
-          printf '%s' "${{ secrets.GRAFANA_CLOUD_REMOTE_WRITE_TOKEN }}" > monitoring/secrets/grafana-cloud-password
-          chmod 644 monitoring/secrets/grafana-cloud-password
-
-      - name: Write Grafana Cloud Loki credentials
-        run: |
-          set -e
-          cd ~/apps/devops-qr
-          mkdir -p monitoring/secrets
-          printf '%s' "${{ secrets.GRAFANA_CLOUD_LOKI_TOKEN }}" > monitoring/secrets/loki-token
-          chmod 644 monitoring/secrets/loki-token
-
       - name: Pull and restart stack on Pi (Docker services like Grafana)
         run: |
           set -e
@@ -362,6 +346,28 @@ jobs:
             | jq -r '.data.activeTargets[]
                     | select(.labels.job=="velero" or .labels.job=="cadvisor-k8s")
                     | "\(.labels.job)\t\(.health)\t\(.discoveredLabels.__address__)\t\(.lastError)"'
+
+      - name: Ensure Alloy picked up alloy-config.alloy (reload + sanity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST_FILE=/home/blain/apps/devops-qr/monitoring/alloy-config.alloy
+
+          echo "---- host alloy-config.alloy grep ----"
+          grep -F 'url = "http://loki:3100/loki/api/v1/push"' "$HOST_FILE" \
+            || { echo "❌ local Loki write endpoint missing in host file"; exit 1; }
+
+          ALLOY=$(docker ps --format '{{.Names}}' | grep -i alloy | head -n1)
+
+          echo "→ Restart Alloy to pick up new config (hot-reload fails after git replaces file inode)"
+          docker restart "$ALLOY"
+          sleep 10
+
+          echo "---- container alloy-config.alloy grep ----"
+          docker exec "$ALLOY" sh -lc "grep -F 'url = \"http://loki:3100/loki/api/v1/push\"' /etc/alloy/config.alloy || echo '❌ local Loki write endpoint not found inside container'"
+
+          echo "---- alloy logs (checking for errors) ----"
+          docker logs "$ALLOY" --tail 30
 
       - name: Wait for Grafana health
         run: |

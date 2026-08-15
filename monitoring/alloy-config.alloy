@@ -11,7 +11,7 @@ loki.source.journal "journal_logs" {
 }
 
 loki.process "journal_logs" {
-  # forward_to = [loki.write.grafana_cloud_loki.receiver]  # TODO: point at local Loki once it's set up
+  forward_to = [loki.write.local_loki.receiver]
 
   stage.drop {
     older_than = "24h"
@@ -26,7 +26,7 @@ local.file_match "docker_logs" {
 }
 
 loki.process "docker_logs" {
-  # forward_to = [loki.write.grafana_cloud_loki.receiver]  # TODO: point at local Loki once it's set up
+  forward_to = [loki.write.local_loki.receiver]
 
   stage.docker {}
 
@@ -38,4 +38,11 @@ loki.process "docker_logs" {
 loki.source.file "docker_logs" {
   targets    = local.file_match.docker_logs.targets
   forward_to = [loki.process.docker_logs.receiver]
+}
+
+// --- Sink: push everything to local Loki (no auth needed, internal Docker network)
+loki.write "local_loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
 }

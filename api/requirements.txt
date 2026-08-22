@@ -3,6 +3,6 @@ fastapi>=0.141.1
 pillow>=12.3.0
 pydantic>=2.5.3
 pypng>=0.20220715.0
-python-dotenv>=1.2.2
+python-dotenv>=1.2.3
 qrcode>=8.2
 uvicorn>=0.52.1
